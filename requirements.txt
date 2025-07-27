@@ -1,3 +1,6 @@
+setuptools>=65.0.0
+wheel
+build
 absl-py==2.2.2
 aiodns==3.4.0
 aiohappyeyeballs==2.6.1
