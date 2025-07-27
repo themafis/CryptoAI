@@ -1,11 +1,11 @@
 import requests
 import pandas as pd
-import numpy as np
+import pandas_ta as ta
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import math
-import os
 import uvicorn
+
 
 app = FastAPI()
 
@@ -20,45 +20,7 @@ app.add_middleware(
 
 @app.get("/")
 def read_root():
-    return {"message": "CryptoAI Backend API çalışıyor!"}
-
-# Manuel RSI hesaplama
-def calculate_rsi(prices, period=14):
-    deltas = np.diff(prices)
-    gains = np.where(deltas > 0, deltas, 0)
-    losses = np.where(deltas < 0, -deltas, 0)
-    
-    avg_gains = pd.Series(gains).rolling(window=period).mean()
-    avg_losses = pd.Series(losses).rolling(window=period).mean()
-    
-    rs = avg_gains / avg_losses
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-# Manuel MACD hesaplama
-def calculate_macd(prices, fast=12, slow=26, signal=9):
-    ema_fast = pd.Series(prices).ewm(span=fast).mean()
-    ema_slow = pd.Series(prices).ewm(span=slow).mean()
-    macd_line = ema_fast - ema_slow
-    signal_line = macd_line.ewm(span=signal).mean()
-    histogram = macd_line - signal_line
-    return macd_line, signal_line, histogram
-
-# Manuel EMA hesaplama
-def calculate_ema(prices, period):
-    return pd.Series(prices).ewm(span=period).mean()
-
-# Manuel SMA hesaplama
-def calculate_sma(prices, period):
-    return pd.Series(prices).rolling(window=period).mean()
-
-# Manuel Bollinger Bands hesaplama
-def calculate_bollinger_bands(prices, period=20, std_dev=2):
-    sma = calculate_sma(prices, period)
-    std = pd.Series(prices).rolling(window=period).std()
-    upper_band = sma + (std * std_dev)
-    lower_band = sma - (std * std_dev)
-    return upper_band, sma, lower_band
+    return {"message": "API çalışıyor!"}
 
 @app.get("/price/{coin_id}")
 def get_coin_price(coin_id: str = "bitcoin"):
@@ -72,6 +34,7 @@ def get_coin_ohlc(coin_id: str = "bitcoin", days: int = 1):
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc?vs_currency=usd&days={days}"
     response = requests.get(url)
     data = response.json()
+    # OHLCV: [timestamp, open, high, low, close]
     return {"ohlc": data}
 
 @app.get("/rsi/{coin_id}")
@@ -82,7 +45,7 @@ def get_coin_rsi(coin_id: str = "bitcoin", days: int = 1):
     if not data:
         return {"error": "Veri yok"}
     df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close"])
-    rsi = calculate_rsi(df["close"].values, 14)
+    rsi = ta.rsi(df["close"], length=14)
     return {"rsi": rsi.dropna().tolist()}
 
 @app.get("/indicators/{coin_id}")
@@ -91,41 +54,41 @@ def get_all_indicators(coin_id: str = "bitcoin", days: int = 30):
         url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc?vs_currency=usd&days={days}"
         response = requests.get(url)
         data = response.json()
-        
+        print(f"[DEBUG] API'den dönen ham veri: {data}")
         if not data or not isinstance(data, list) or len(data) == 0:
+            print("[ERROR] Veri yok veya CoinGecko API boş döndü")
             return {"error": "Veri yok veya CoinGecko API boş döndü"}
-        
         df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close"])
-        
+        print(f"[DEBUG] Oluşan DataFrame: {df.head()}")
         if df.empty or df.isnull().all().all():
+            print("[ERROR] DataFrame tamamen boş veya tüm değerler NaN")
             return {"error": "Veri DataFrame'e aktarılamadı veya tamamen boş"}
-        
+        # Sütunlarda None veya tümü NaN ise
+        for col in ["open", "high", "low", "close"]:
+            if col not in df.columns or df[col].isnull().all():
+                print(f"[ERROR] {col} sütunu boş veya eksik!")
+                return {"error": f"{col} sütunu boş veya eksik"}
         result = {}
-        prices = df["close"].values
-        
-        # Manuel hesaplamalar
-        result["RSI"] = calculate_rsi(prices, 14).dropna().tolist()
-        
-        macd_line, signal_line, histogram = calculate_macd(prices)
-        result["MACD"] = {
-            "MACD_12_26_9": macd_line.iloc[-1] if not macd_line.empty else None,
-            "MACDs_12_26_9": signal_line.iloc[-1] if not signal_line.empty else None,
-            "MACDh_12_26_9": histogram.iloc[-1] if not histogram.empty else None
-        }
-        
-        result["EMA_12"] = calculate_ema(prices, 12).dropna().tolist()
-        result["EMA_26"] = calculate_ema(prices, 26).dropna().tolist()
-        result["SMA_20"] = calculate_sma(prices, 20).dropna().tolist()
-        
-        # Bollinger Bands
-        upper, middle, lower = calculate_bollinger_bands(prices)
-        result["BollingerBands"] = {
-            "BBU_20_2.0": upper.iloc[-1] if not upper.empty else None,
-            "BBM_20_2.0": middle.iloc[-1] if not middle.empty else None,
-            "BBL_20_2.0": lower.iloc[-1] if not lower.empty else None
-        }
-        
-        # Pivot Points
+        # Temel indikatörler
+        result["RSI"] = ta.rsi(df["close"], length=14).dropna().tolist() if not df["close"].isnull().all() else []
+        macd_df = ta.macd(df["close"]) if not df["close"].isnull().all() else pd.DataFrame()
+        result["MACD"] = macd_df.iloc[-1].to_dict() if not macd_df.empty else {}
+        result["EMA_12"] = ta.ema(df["close"], length=12).dropna().tolist() if not df["close"].isnull().all() else []
+        result["EMA_26"] = ta.ema(df["close"], length=26).dropna().tolist() if not df["close"].isnull().all() else []
+        result["SMA_20"] = ta.sma(df["close"], length=20).dropna().tolist() if not df["close"].isnull().all() else []
+        adx_df = ta.adx(df["high"], df["low"], df["close"]) if not df["high"].isnull().all() and not df["low"].isnull().all() and not df["close"].isnull().all() else pd.DataFrame()
+        result["ADX"] = adx_df.iloc[-1].to_dict() if not adx_df.empty else {}
+        bb_df = ta.bbands(df["close"])
+        result["BollingerBands"] = bb_df.iloc[-1].to_dict() if not bb_df.empty else {}
+        stochrsi_df = ta.stochrsi(df["close"])
+        result["StochRSI"] = stochrsi_df.iloc[-1].to_dict() if not stochrsi_df.empty else {}
+        result["CCI"] = ta.cci(df["high"], df["low"], df["close"]).dropna().tolist() if not df["close"].isnull().all() else []
+        result["ATR"] = ta.atr(df["high"], df["low"], df["close"]).dropna().tolist() if not df["close"].isnull().all() else []
+        result["OBV"] = ta.obv(df["close"], df["close"]).dropna().tolist() if not df["close"].isnull().all() else []
+        if "volume" in df.columns and not df["volume"].isnull().all():
+            result["VWAP"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"]).dropna().tolist()
+        else:
+            result["VWAP"] = None
         pivot = ((df["high"] + df["low"] + df["close"]) / 3)
         r1 = (2 * pivot) - df["low"]
         s1 = (2 * pivot) - df["high"]
@@ -138,14 +101,39 @@ def get_all_indicators(coin_id: str = "bitcoin", days: int = 30):
             "resistance2": r2.iloc[-1] if not r2.empty else None,
             "support2": s2.iloc[-1] if not s2.empty else None
         }
-        
-        # Basit değerler
-        result["Volume"] = df["close"].tolist()  # Volume yoksa close kullan
-        result["ADX"] = {"ADX_14": 25.0}  # Basit değer
-        
-        return result
+        # Ichimoku hesaplama (tuple unpack ile, güvenli)
+        try:
+            ichimoku = ta.ichimoku(df["high"], df["low"], df["close"])
+            if isinstance(ichimoku, tuple):
+                conversion, base, span_a, span_b = ichimoku
+                if all([hasattr(x, 'iloc') and not x.empty for x in [conversion, base, span_a, span_b]]):
+                    result["Ichimoku"] = {
+                        "conversion": conversion.iloc[-1],
+                        "base": base.iloc[-1],
+                        "span_a": span_a.iloc[-1],
+                        "span_b": span_b.iloc[-1]
+                    }
+                else:
+                    result["Ichimoku"] = {}
+            else:
+                result["Ichimoku"] = {}
+        except Exception:
+            result["Ichimoku"] = {}
+        psar_df = ta.psar(df["high"], df["low"])
+        result["ParabolicSAR"] = psar_df.iloc[-1].to_dict() if not psar_df.empty else {}
+        result["WilliamsR"] = ta.willr(df["high"], df["low"], df["close"]).dropna().tolist() if not df["close"].isnull().all() else []
+        supertrend_df = ta.supertrend(df["high"], df["low"], df["close"])
+        result["Supertrend"] = supertrend_df.iloc[-1].to_dict() if not supertrend_df.empty else {}
+        result["MFI"] = ta.mfi(df["high"], df["low"], df["close"], df["close"]).dropna().tolist() if not df["close"].isnull().all() else []
+        donchian_df = ta.donchian(df["high"], df["low"])
+        result["Donchian"] = donchian_df.iloc[-1].to_dict() if not donchian_df.empty else {}
+        keltner_df = ta.kc(df["high"], df["low"], df["close"])
+        result["Keltner"] = keltner_df.iloc[-1].to_dict() if not keltner_df.empty else {}
+        result["Volume"] = df["close"].tolist() if not df["close"].isnull().all() else []
+        print(f"[DEBUG] Hesaplanan indikatörler: {result}")
+        return clean_json(result)
     except Exception as e:
-        print(f"[ERROR] Hata: {e}")
+        print(f"[EXCEPTION] {str(e)}")
         return {"error": str(e)}
 
 def get_binance_ohlcv(symbol="BTCUSDT", interval="1d", limit=30):
@@ -159,6 +147,7 @@ def get_binance_ohlcv(symbol="BTCUSDT", interval="1d", limit=30):
     ])
     for col in ["open", "high", "low", "close", "volume"]:
         df[col] = df[col].astype(float)
+    # open_time'ı datetime'a çevir ve index yap
     df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
     df.set_index("open_time", inplace=True)
     return df
@@ -177,31 +166,18 @@ def get_all_indicators_binance(symbol: str = "BTCUSDT", interval: str = "1d", li
     try:
         df = get_binance_ohlcv(symbol, interval, limit)
         result = {}
-        prices = df["close"].values
-        
-        # Manuel hesaplamalar
-        result["RSI"] = calculate_rsi(prices, 14).dropna().tolist()
-        
-        macd_line, signal_line, histogram = calculate_macd(prices)
-        result["MACD"] = {
-            "MACD_12_26_9": macd_line.iloc[-1] if not macd_line.empty else None,
-            "MACDs_12_26_9": signal_line.iloc[-1] if not signal_line.empty else None,
-            "MACDh_12_26_9": histogram.iloc[-1] if not histogram.empty else None
-        }
-        
-        result["EMA_12"] = calculate_ema(prices, 12).dropna().tolist()
-        result["EMA_26"] = calculate_ema(prices, 26).dropna().tolist()
-        result["SMA_20"] = calculate_sma(prices, 20).dropna().tolist()
-        
-        # Bollinger Bands
-        upper, middle, lower = calculate_bollinger_bands(prices)
-        result["BollingerBands"] = {
-            "BBU_20_2.0": upper.iloc[-1] if not upper.empty else None,
-            "BBM_20_2.0": middle.iloc[-1] if not middle.empty else None,
-            "BBL_20_2.0": lower.iloc[-1] if not lower.empty else None
-        }
-        
-        # Pivot Points
+        # Hacim gerektirmeyenler
+        result["RSI"] = ta.rsi(df["close"], length=14).dropna().tolist()
+        result["MACD"] = ta.macd(df["close"]).iloc[-1].to_dict() if not ta.macd(df["close"]).empty else {}
+        result["EMA_12"] = ta.ema(df["close"], length=12).dropna().tolist()
+        result["EMA_26"] = ta.ema(df["close"], length=26).dropna().tolist()
+        result["SMA_20"] = ta.sma(df["close"], length=20).dropna().tolist()
+        result["ADX"] = ta.adx(df["high"], df["low"], df["close"]).iloc[-1].to_dict() if not ta.adx(df["high"], df["low"], df["close"]).empty else {}
+        result["BollingerBands"] = ta.bbands(df["close"]).iloc[-1].to_dict() if not ta.bbands(df["close"]).empty else {}
+        result["StochRSI"] = ta.stochrsi(df["close"]).iloc[-1].to_dict() if not ta.stochrsi(df["close"]).empty else {}
+        result["CCI"] = ta.cci(df["high"], df["low"], df["close"]).dropna().tolist()
+        result["ATR"] = ta.atr(df["high"], df["low"], df["close"]).dropna().tolist()
+        # Klasik pivot noktası hesaplama (manuel)
         pivot = (df["high"] + df["low"] + df["close"]) / 3
         r1 = (2 * pivot) - df["low"]
         s1 = (2 * pivot) - df["high"]
@@ -214,12 +190,35 @@ def get_all_indicators_binance(symbol: str = "BTCUSDT", interval: str = "1d", li
             "resistance2": r2.iloc[-1] if not r2.empty else None,
             "support2": s2.iloc[-1] if not s2.empty else None
         }
-        
-        # Basit değerler
+        # Ichimoku hesaplama (tuple unpack ile, güvenli)
+        try:
+            ichimoku = ta.ichimoku(df["high"], df["low"], df["close"])
+            if isinstance(ichimoku, tuple):
+                conversion, base, span_a, span_b = ichimoku
+                if all([hasattr(x, 'iloc') and not x.empty for x in [conversion, base, span_a, span_b]]):
+                    result["Ichimoku"] = {
+                        "conversion": conversion.iloc[-1],
+                        "base": base.iloc[-1],
+                        "span_a": span_a.iloc[-1],
+                        "span_b": span_b.iloc[-1]
+                    }
+                else:
+                    result["Ichimoku"] = {}
+            else:
+                result["Ichimoku"] = {}
+        except Exception:
+            result["Ichimoku"] = {}
+        result["ParabolicSAR"] = ta.psar(df["high"], df["low"]).iloc[-1].to_dict() if not ta.psar(df["high"], df["low"]).empty else {}
+        result["WilliamsR"] = ta.willr(df["high"], df["low"], df["close"]).dropna().tolist()
+        result["Donchian"] = ta.donchian(df["high"], df["low"]).iloc[-1].to_dict() if not ta.donchian(df["high"], df["low"]).empty else {}
+        result["Keltner"] = ta.kc(df["high"], df["low"], df["close"]).iloc[-1].to_dict() if not ta.kc(df["high"], df["low"], df["close"]).empty else {}
+        # Hacim gerektirenler (sadece Binance ile)
+        result["VWAP"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"]).dropna().tolist()
+        result["MFI"] = ta.mfi(df["high"], df["low"], df["close"], df["volume"]).dropna().tolist()
+        result["OBV"] = ta.obv(df["close"], df["volume"]).dropna().tolist()
+        # Ekstra hacim
         result["Volume"] = df["volume"].tolist()
-        result["ADX"] = {"ADX_14": 25.0}
-        
-        return result
+        return clean_json(result)
     except Exception as e:
         return {"error": str(e)}
 
@@ -228,31 +227,17 @@ def get_all_indicators_coingecko(coin_id: str = "bitcoin", days: int = 30):
     try:
         df = get_coingecko_ohlc(coin_id, days)
         result = {}
-        prices = df["close"].values
-        
-        # Manuel hesaplamalar
-        result["RSI"] = calculate_rsi(prices, 14).dropna().tolist()
-        
-        macd_line, signal_line, histogram = calculate_macd(prices)
-        result["MACD"] = {
-            "MACD_12_26_9": macd_line.iloc[-1] if not macd_line.empty else None,
-            "MACDs_12_26_9": signal_line.iloc[-1] if not signal_line.empty else None,
-            "MACDh_12_26_9": histogram.iloc[-1] if not histogram.empty else None
-        }
-        
-        result["EMA_12"] = calculate_ema(prices, 12).dropna().tolist()
-        result["EMA_26"] = calculate_ema(prices, 26).dropna().tolist()
-        result["SMA_20"] = calculate_sma(prices, 20).dropna().tolist()
-        
-        # Bollinger Bands
-        upper, middle, lower = calculate_bollinger_bands(prices)
-        result["BollingerBands"] = {
-            "BBU_20_2.0": upper.iloc[-1] if not upper.empty else None,
-            "BBM_20_2.0": middle.iloc[-1] if not middle.empty else None,
-            "BBL_20_2.0": lower.iloc[-1] if not lower.empty else None
-        }
-        
-        # Pivot Points
+        result["RSI"] = ta.rsi(df["close"], length=14).dropna().tolist()
+        result["MACD"] = ta.macd(df["close"]).iloc[-1].to_dict() if not ta.macd(df["close"]).empty else {}
+        result["EMA_12"] = ta.ema(df["close"], length=12).dropna().tolist()
+        result["EMA_26"] = ta.ema(df["close"], length=26).dropna().tolist()
+        result["SMA_20"] = ta.sma(df["close"], length=20).dropna().tolist()
+        result["ADX"] = ta.adx(df["high"], df["low"], df["close"]).iloc[-1].to_dict() if not ta.adx(df["high"], df["low"], df["close"]).empty else {}
+        result["BollingerBands"] = ta.bbands(df["close"]).iloc[-1].to_dict() if not ta.bbands(df["close"]).empty else {}
+        result["StochRSI"] = ta.stochrsi(df["close"]).iloc[-1].to_dict() if not ta.stochrsi(df["close"]).empty else {}
+        result["CCI"] = ta.cci(df["high"], df["low"], df["close"]).dropna().tolist()
+        result["ATR"] = ta.atr(df["high"], df["low"], df["close"]).dropna().tolist()
+        # Klasik pivot noktası hesaplama (manuel)
         pivot = (df["high"] + df["low"] + df["close"]) / 3
         r1 = (2 * pivot) - df["low"]
         s1 = (2 * pivot) - df["high"]
@@ -265,12 +250,29 @@ def get_all_indicators_coingecko(coin_id: str = "bitcoin", days: int = 30):
             "resistance2": r2.iloc[-1] if not r2.empty else None,
             "support2": s2.iloc[-1] if not s2.empty else None
         }
-        
-        # Basit değerler
-        result["Volume"] = df["close"].tolist()
-        result["ADX"] = {"ADX_14": 25.0}
-        
-        return result
+        # Ichimoku hesaplama (tuple unpack ile, güvenli)
+        try:
+            ichimoku = ta.ichimoku(df["high"], df["low"], df["close"])
+            if isinstance(ichimoku, tuple):
+                conversion, base, span_a, span_b = ichimoku
+                if all([hasattr(x, 'iloc') and not x.empty for x in [conversion, base, span_a, span_b]]):
+                    result["Ichimoku"] = {
+                        "conversion": conversion.iloc[-1],
+                        "base": base.iloc[-1],
+                        "span_a": span_a.iloc[-1],
+                        "span_b": span_b.iloc[-1]
+                    }
+                else:
+                    result["Ichimoku"] = {}
+            else:
+                result["Ichimoku"] = {}
+        except Exception:
+            result["Ichimoku"] = {}
+        result["ParabolicSAR"] = ta.psar(df["high"], df["low"]).iloc[-1].to_dict() if not ta.psar(df["high"], df["low"]).empty else {}
+        result["WilliamsR"] = ta.willr(df["high"], df["low"], df["close"]).dropna().tolist()
+        result["Donchian"] = ta.donchian(df["high"], df["low"]).iloc[-1].to_dict() if not ta.donchian(df["high"], df["low"]).empty else {}
+        result["Keltner"] = ta.kc(df["high"], df["low"], df["close"]).iloc[-1].to_dict() if not ta.kc(df["high"], df["low"], df["close"]).empty else {}
+        return clean_json(result)
     except Exception as e:
         return {"error": str(e)}
 
@@ -282,26 +284,23 @@ def get_coin_info(symbol: str):
     coin = next((c for c in coins if c["symbol"].lower() == symbol.lower()), None)
     if not coin:
         return {"error": "Coin bulunamadı"}
-    
-    # Coin detaylarını çek
-    coin_detail = requests.get(f"https://api.coingecko.com/api/v3/coins/{coin['id']}").json()
-    
+    # Detaylı bilgi çek
+    details = requests.get(f"https://api.coingecko.com/api/v3/coins/{coin['id']}").json()
     return {
         "id": coin["id"],
         "symbol": coin["symbol"],
         "name": coin["name"],
-        "image": coin_detail.get("image", {}).get("large"),
-        "thumb": coin_detail.get("image", {}).get("thumb"),
-        "small": coin_detail.get("image", {}).get("small")
+        "image": details.get("image", {}).get("large"),
+        "thumb": details.get("image", {}).get("thumb"),
+        "small": details.get("image", {}).get("small"),
     }
 
 def clean_json(obj):
-    """JSON serialization için temizleme"""
     if isinstance(obj, dict):
         return {k: clean_json(v) for k, v in obj.items()}
     elif isinstance(obj, list):
-        return [clean_json(item) for item in obj]
-    elif isinstance(obj, (int, float)):
+        return [clean_json(v) for v in obj]
+    elif isinstance(obj, float):
         if math.isnan(obj) or math.isinf(obj):
             return None
         return obj
