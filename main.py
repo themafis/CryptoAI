@@ -2,21 +2,10 @@ import requests
 import pandas as pd
 import pandas_ta as ta
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 import math
-import uvicorn
 
 
 app = FastAPI()
-
-# CORS ayarları (iOS app'inizden erişim için)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Production'da spesifik domain'ler belirtin
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 @app.get("/")
 def read_root():
@@ -306,6 +295,3 @@ def clean_json(obj):
         return obj
     else:
         return obj
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
