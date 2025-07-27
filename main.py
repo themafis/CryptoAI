@@ -307,6 +307,5 @@ def clean_json(obj):
     else:
         return obj
 
-# Render için server başlatma
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
