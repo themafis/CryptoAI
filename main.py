@@ -3,6 +3,8 @@ import pandas as pd
 import pandas_ta as ta
 from fastapi import FastAPI
 import math
+import os
+import uvicorn
 
 app = FastAPI()
 
@@ -294,3 +296,8 @@ def clean_json(obj):
         return obj
     else:
         return obj
+    
+    
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
